@@ -1,0 +1,20 @@
+{
+  "name": "devcon-schedule",
+  "version": "0.0.1",
+  "description": "Repository for fetching the Devcon schedule and uploading the data to Swarm",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@ethersphere/bee-js": "^8.1.0",
+    "node-schedule": "^2.1.1",
+    "ethers": "^6.13.3",
+    "dotenv": "^16.4.5"
+  }
+}

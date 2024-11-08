@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "fs/promises";
-import { Bee } from "@ethersphere/bee-js";
+import { Wallet } from "ethers";
+import { Bee, Utils } from "@ethersphere/bee-js";
 import schedule from "node-schedule";
 import {
   DEFUAULT_BEE_API_URL,
@@ -18,6 +19,7 @@ const bee = new Bee(process.env.BEE_API_URL || DEFUAULT_BEE_API_URL);
 const feedOwnerAddress = process.env.FEED_OWNER_ADDRESS || FEED_OWNER_ADDRESS;
 const feedTopic = process.env.FEED_TOPIC || FEED_TOPIC;
 const mainnet_stamp = process.env.STAMP || DUMMY_STAMP;
+const mainnet_pk = process.env.MAINNET_PK || null;
 
 async function initFeed(rawTopic, stamp) {
   try {
@@ -29,8 +31,19 @@ async function initFeed(rawTopic, stamp) {
       feedOwnerAddress
     );
     console.log("created feed manifest", feedManif.reference);
-    // TODO: mainnet_pk === signer: gateway signer
-    return bee.makeFeedWriter(FEEDTYPE_SEQUENCE, topic, mainnet_pk);
+    if (!mainnet_pk) {
+      console.log("mainnet_pk is missing");
+      return null;
+    }
+    const wallet = new Wallet(mainnet_pk);
+    const signer = {
+      address: Utils.hexToBytes(wallet.address.slice(2)),
+      sign: async (data) => {
+        return await wallet.signMessage(data);
+      },
+    };
+
+    return bee.makeFeedWriter(FEEDTYPE_SEQUENCE, topic, signer);
   } catch (error) {
     console.log("error creating feed manifest", error);
     return null;
@@ -45,7 +58,7 @@ async function uploadSessionsJSON(stamp, data) {
     return sessionsReference.reference;
   } catch (error) {
     console.log("error file upload", error);
-    return "";
+    return null;
   }
 }
 
@@ -53,22 +66,22 @@ async function updateFeed(feedWriter, stamp, ref) {
   console.log("updating feed with the file reference: ", ref);
   try {
     const feedUpdateRes = await feedWriter.upload(stamp, ref);
-    console.log("feed upload result: ", feedUpdateRes);
-    return feedUpdateRes;
+    console.log("feed upload result: ", feedUpdateRes.reference);
+    return feedUpdateRes.reference;
   } catch (error) {
     console.log("error feed update: ", error);
-    return "";
+    return null;
   }
 }
 
-async function transformDataMaptoJSON(path, filename, version) {
+async function transformDataMaptoJSON(path, filename) {
   let sessionsFile;
   try {
     console.log("reading " + filename);
     sessionsFile = await readFile(path + filename);
   } catch (e) {
-    console.log("error reading session .json file", e);
-    return "";
+    console.log("error reading " + path + filename + " file", e);
+    return null;
   }
 
   const sortedSessionsMap = new Map();
@@ -77,8 +90,7 @@ async function transformDataMaptoJSON(path, filename, version) {
   }
 
   const items = JSON.parse(sessionsFile).data.items;
-  console.log(typeof items);
-  const itemsWithoutAvatars = removeAvatarFromSessions(items);
+  const itemsWithoutAvatars = removeSpeakers(items);
 
   for (let i = 0; i < itemsWithoutAvatars.length; i++) {
     const slotStart = itemsWithoutAvatars[i].slot_start;
@@ -112,20 +124,13 @@ async function transformDataMaptoJSON(path, filename, version) {
 
   sortedSessionsMap.forEach((value, key) => {
     console.log(key, " length: ", value.length);
+    if (value.length == 0) {
+      console.log("empty day: ", key);
+      return null;
+    }
   });
-  const outputFile =
-    "all_devcon_7_sessions_sorted_by_day_asc_" + version + ".json";
-  try {
-    await writeFile(
-      path + outputFile,
-      JSON.stringify(Object.fromEntries(sortedSessionsMap), null, 2)
-    );
-    console.log("sortedSessionsMap written to file: ", outputFile);
-  } catch (e) {
-    console.log("error writing sortedSessionsMap file", e);
-    return null;
-  }
-  return outputFile;
+
+  return sortedSessionsMap;
 }
 
 async function uploadFeedAndData(path, filename) {
@@ -134,13 +139,14 @@ async function uploadFeedAndData(path, filename) {
     console.log("reading " + filename);
     sessionsFile = await readFile(path + filename);
   } catch (e) {
-    console.log("error reading the file", e);
-    return;
+    console.log("error reading " + filename + " file", e);
+    return null;
   }
+
   const feedWriter = await initFeed(feedTopic, mainnet_stamp);
   if (feedWriter === null) {
     console.log("feedwriter is null");
-    return;
+    return null;
   }
 
   const sessionsReference = await uploadSessionsJSON(
@@ -148,23 +154,19 @@ async function uploadFeedAndData(path, filename) {
     sessionsFile
   );
 
-  if (sessionsReference !== "") {
-    await updateFeed(feedWriter, mainnet_stamp, sessionsReference);
+  if (!sessionsReference || sessionsReference.length === 0) {
+    console.log("canot update feed because of invalid reference");
+    return null;
   }
+  return await updateFeed(feedWriter, mainnet_stamp, sessionsReference);
 }
-// TODO: fix remove avatar from the sessions
-function removeAvatarFromSessions(sessionItems) {
+
+function removeSpeakers(sessionItems) {
   const newSessionItems = sessionItems;
   for (let i = 0; i < newSessionItems.length; i++) {
     const item = newSessionItems[i];
-    for (let j = 0; j < item.length; j++) {
-      if (item.speakers) {
-        for (let k = 0; k < item.speakers.length; k++) {
-          if (item.speakers[k].avatar) {
-            item.speakers[k].avatar = "";
-          }
-        }
-      }
+    if (item.speakers) {
+      item.speakers = [];
     }
   }
 
@@ -178,8 +180,8 @@ async function fetchDevconAPI(path, filename) {
     const versionFile = await readFile(path + filename);
     currentVersion = JSON.parse(versionFile).data;
   } catch (e) {
-    console.log("error reading version file", e);
-    return "";
+    console.log("error reading version file " + filename, e);
+    return;
   }
 
   try {
@@ -206,7 +208,7 @@ async function fetchDevconAPI(path, filename) {
         console.log("new sessions written to file: ", newSessionsFile);
       } catch (e) {
         console.log("error writing sessions file", e);
-        return "";
+        return;
       }
 
       // udpate the version file only if the fetch was successful
@@ -215,27 +217,42 @@ async function fetchDevconAPI(path, filename) {
         console.log("new version written to file: ", path + filename);
       } catch (e) {
         console.log("error writing version file", e);
-        return "";
+        return;
       }
 
-      const updatedSessionMapJson = await transformDataMaptoJSON(
+      const sortedSessionsMap = await transformDataMaptoJSON(
         ASSETS_PATH,
-        newSessionsFile,
-        newVersion
+        newSessionsFile
       );
 
-      // if (updatedSessionMapJson === null) {
-      //   console.log("error transforming the data map to json");
-      //   return "";
-      // }
-      // uploadFeedAndData(ASSETS_PATH, updatedSessionMapJson);
+      if (sortedSessionsMap === null) {
+        console.log("error transforming the data map to json");
+        return;
+      }
+      const outputFile =
+        "all_devcon_7_sessions_sorted_by_day_asc_" + newVersion + ".json";
+      try {
+        await writeFile(
+          path + outputFile,
+          JSON.stringify(Object.fromEntries(sortedSessionsMap), null, 2)
+        );
+        console.log("sortedSessionsMap written to file: ", outputFile);
+      } catch (e) {
+        console.log("error writing sortedSessionsMap file", e);
+        return null;
+      }
+
+      const res = uploadFeedAndData(ASSETS_PATH, outputFile);
+      if (res === null) {
+        console.log("session data update fail, still using the old data");
+      }
     } else {
       console.log("version did not change, current version: ", currentVersion);
     }
   } catch (e) {
-    console.log("fetch error: ", e);
+    console.log("unexpected error during data fetch and update: ", e);
   }
-  return "";
+  return;
 }
 
 async function scheduleSessionUpdateJob() {
@@ -255,7 +272,7 @@ async function scheduleSessionUpdateJob() {
 }
 
 async function main() {
-  console.log("executing main...");
+  console.log("Fetch and update started at:", new Date().toLocaleString());
   await fetchDevconAPI(ASSETS_PATH, "version.json");
   // await scheduleSessionUpdateJob();
 }

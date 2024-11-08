@@ -257,24 +257,26 @@ async function fetchDevconAPI(path, filename) {
 
 async function scheduleSessionUpdateJob() {
   const jobName = "fetchDevconAPI";
-  const job = schedule.scheduleJob(jobName, "*/30 * * * * *", async () => {
-    console.log("Scheduler job started at:", new Date().toLocaleString());
+  const updadtePeriod = 15;
+  const cronSchedule = "* */" + updadtePeriod + " * * * *";
+  schedule.scheduleJob(jobName, cronSchedule, async () => {
+    console.log(
+      "Scheduler job started at: " +
+        new Date().toLocaleString() +
+        " with period: " +
+        updadtePeriod +
+        " minutes (" +
+        cronSchedule +
+        ")"
+    );
     await fetchDevconAPI(ASSETS_PATH, "version.json");
     console.log("Scheduler job ended at:", new Date().toLocaleString());
   });
-
-  const canecelTime = 60 * 1000; // 60 seconds
-  setTimeout(() => {
-    let fetchDevconAPIJob = schedule.scheduledJobs[jobName];
-    fetchDevconAPIJob.cancel();
-    console.log("Scheduler stopped the job: " + jobName);
-  }, canecelTime);
 }
 
 async function main() {
   console.log("Fetch and update started at:", new Date().toLocaleString());
-  await fetchDevconAPI(ASSETS_PATH, "version.json");
-  // await scheduleSessionUpdateJob();
+  scheduleSessionUpdateJob();
 }
 
 main();

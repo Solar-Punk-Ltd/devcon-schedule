@@ -279,4 +279,5 @@ async function main() {
   scheduleSessionUpdateJob();
 }
 
-main();
+// main();
+uploadFeedAndData(ASSETS_PATH, "all_devcon_7_sessions_sorted_by_day_asc_1731761435222.json")
